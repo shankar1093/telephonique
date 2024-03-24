@@ -11,6 +11,7 @@ import string
 import requests
 from mistral_email import send_email_with_content
 from test_buttons import alexa_switch
+import vonage 
 
 from flask import Flask, request
 from flask_sock import Sock
@@ -48,12 +49,14 @@ auth_token = os.environ["TWILIO_AUTH_TOKEN"]
 client_twilio = Client(account_sid, auth_token)
 redis_client = redis.Redis(host="localhost", port=6379, db=0)
 mistral_api_key = os.environ["MISTRAL_API_KEY"]
-MISTRAL_MODEL = "mistral-large-latest"
+# MISTRAL_MODEL = "mistral-medium-latest"
 call_number_map = {"+19089221772":"kevin", "+15182683957":"shankar"}
 app = Flask(__name__)
 sock = Sock(app)
 twilio_client = Client()
 redis_client = redis.Redis(host="localhost", port=6379, decode_responses=True)
+client = vonage.Client(key="81d385df", secret="ILutp7y2WKzrraeM")
+sms = vonage.Sms(client)
 CL = "\x1b[0K"
 BS = "\x08"
 
@@ -101,7 +104,7 @@ def conversation_chat_mistral_summarize(unique_id):
     context = [
         {
             "role": "system",
-            "content": "summarize this conversation"
+            "content": "summarize this conversation as bullet points"
         }
     ]
 
@@ -120,7 +123,7 @@ def conversation_chat_mistral_summarize(unique_id):
 
 
     payload = {
-        "model": "mistral-large-latest",
+        "model": "mistral-medium-latest",
         "messages": context
         + list_of_dicts[:-1],
         "temperature": 0.7,
@@ -172,10 +175,10 @@ def conversation_chat_mistral_decision(prompt, transcription, unique_id):
     }
 
     support_context = [
-        {"role": "system", "content": "The following content is purely for context"}
+        {"role": "system", "content": "Be very brief with your responses. Less than 15 words."}
     ]
     payload = {
-        "model": "mistral-large-latest",
+        "model": "mistral-small-latest",
         "messages": context + [{"role": "user", "content": transcription}]
         + support_context,
         "temperature": 0.7,
@@ -192,13 +195,15 @@ def conversation_chat_mistral_decision(prompt, transcription, unique_id):
     if response.status_code == 200:
         # Parse the JSON response
         data = response.json()
+        logger.info(data["choices"][0]["message"]["content"])
         return data["choices"][0]["message"]["content"]
-    
+
     return "False"
 
 
 
 def conversation_chat_mistral(transcription, unique_id):
+
     """make gpt calls for the conversation"""
 
     context = [
@@ -206,7 +211,11 @@ def conversation_chat_mistral(transcription, unique_id):
             "role": "system",
             "content": "You are a general purpose conversational"
             "agent being communicated with through the phone."
-            "Try to be brief with responses and answer in 15 words or fewer. If i ask you to email notes, please pretend you can",
+            "Try to be brief with responses and answer in 15 words or fewer."
+            "If i ask you to email notes, please just say sure."
+            "If i ask you to turn on any lights, please just say sure."
+            "If i ask you to turn off any lights, please just say sure."
+            "Keep your responses brief, less than 15 words if possible.",
         }
     ]
     mistral_data = {"role": "system", "content": transcription}
@@ -228,7 +237,7 @@ def conversation_chat_mistral(transcription, unique_id):
         {"role": "system", "content": "The following content is purely for context"}
     ]
     payload = {
-        "model": "mistral-large-latest",
+        "model": "mistral-medium-latest",
         "messages": context
         + list_of_dicts[:-1]
         + [{"role": "user", "content": transcription}]
@@ -308,6 +317,7 @@ def stream(ws):
             logger.info("Streaming is starting")
         elif packet["event"] == "stop":
             logger.info("\nStreaming has stopped")
+            redis_client.flushall()
             if send_email:
                 phone_caller = redis_client.get("caller")
                 if phone_caller == "kevin":
@@ -338,14 +348,16 @@ def stream(ws):
                 if len(result) > 10:
                     start_time_mistral = time.perf_counter()
                     gpt_response = conversation_chat_mistral(result, unique_id)
-                    alexa_prompt = "If the user asks to turn on the lights, return the string True, else False and nothing else"
+                    alexa_prompt = "If the user asks to turn on any lights, return the string True, else False and nothing else"
                     email_prompt = "if the user is asking to email notes, return the string True, else False and nothing else."
                     if "true" in conversation_chat_mistral_decision(result, email_prompt,unique_id).lower().split():
                         print ("Email decision is True")
                         send_email = True
                     if "true" in conversation_chat_mistral_decision(result, alexa_prompt,unique_id).lower().split():
+                        print ("Alexa decision is True")
                         alexa_switch("On")
                     if "false" in conversation_chat_mistral_decision(result, alexa_prompt,unique_id).lower().split():
+                        print ("Alexa decision is True")
                         alexa_switch("Off")
                     
                     end_time_mistral = time.perf_counter()
