@@ -9,7 +9,7 @@ import wave
 import random
 import string
 import requests
-
+from mistral_email import send_email_with_content
 
 from flask import Flask, request
 from flask_sock import Sock
@@ -93,6 +93,125 @@ def process_response(gpt_response, random_number):
         logger.info("no active call")
 
 
+
+def conversation_chat_mistral_summarize(unique_id):
+    """make gpt calls for the conversation"""
+
+    context = [
+        {
+            "role": "system",
+            "content": "summarize this conversation"
+        }
+    ]
+
+
+    serialized_list = redis_client.lrange(unique_id, 0, -1)
+    # Deserialize each JSON string back to a dictionary
+    list_of_dicts = [json.loads(item) for item in serialized_list]
+
+    url = "https://api.mistral.ai/v1/chat/completions"
+
+    # Your API key (if required, replace 'Your_API_Key_Here' with your actual API key)
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {mistral_api_key}",
+    }
+
+
+    payload = {
+        "model": "mistral-large-latest",
+        "messages": context
+        + list_of_dicts[:-1],
+        "temperature": 0.7,
+        "top_p": 1,
+        "max_tokens": 512,
+        "stream": False,
+        "safe_prompt": False,
+        "random_seed": 1337,
+    }
+    response = requests.post(
+        url, headers=headers, data=json.dumps(payload), timeout=100
+    )
+    
+    if response.status_code == 200:
+        # Parse the JSON response
+        data = response.json()
+        logging.info(data["choices"][0]["message"]["content"])
+        mistral_response_data = {
+            "role": "system",
+            "content": data["choices"][0]["message"]["content"],
+        }
+        data_serialized = json.dumps(mistral_response_data)
+        redis_client.rpush(unique_id, data_serialized)
+        serialized_list = redis_client.lrange(unique_id, 0, -1)
+
+        return data["choices"][0]["message"]["content"]
+
+    return None
+
+
+def conversation_chat_mistral_email_decision(transcription, unique_id):
+    """make gpt calls for the conversation"""
+
+    context = [
+        {
+            "role": "system",
+            "content": "if the user is asking to email notes, return the string True, else False and nothing else"
+        }
+    ]
+    mistral_data = {"role": "system", "content": transcription}
+    data_serialized = json.dumps(mistral_data)
+    redis_client.rpush(unique_id, data_serialized)
+    serialized_list = redis_client.lrange(unique_id, 0, -1)
+    # Deserialize each JSON string back to a dictionary
+    list_of_dicts = [json.loads(item) for item in serialized_list]
+
+    url = "https://api.mistral.ai/v1/chat/completions"
+
+    # Your API key (if required, replace 'Your_API_Key_Here' with your actual API key)
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {mistral_api_key}",
+    }
+
+    support_context = [
+        {"role": "system", "content": "The following content is purely for context"}
+    ]
+    payload = {
+        "model": "mistral-large-latest",
+        "messages": context
+        + list_of_dicts[:-1]
+        + [{"role": "user", "content": transcription}]
+        + support_context,
+        "temperature": 0.7,
+        "top_p": 1,
+        "max_tokens": 512,
+        "stream": False,
+        "safe_prompt": False,
+        "random_seed": 1337,
+    }
+    response = requests.post(
+        url, headers=headers, data=json.dumps(payload), timeout=100
+    )
+    
+    if response.status_code == 200:
+        # Parse the JSON response
+        data = response.json()
+        logging.info(data["choices"][0]["message"]["content"])
+        mistral_response_data = {
+            "role": "system",
+            "content": data["choices"][0]["message"]["content"],
+        }
+        data_serialized = json.dumps(mistral_response_data)
+        redis_client.rpush(unique_id, data_serialized)
+        serialized_list = redis_client.lrange(unique_id, 0, -1)
+        logger.info("No email decision")
+        logger.info(data["choices"][0]["message"]["content"])
+        return data["choices"][0]["message"]["content"]
+
+    return None
+
+
 def conversation_chat_mistral(transcription, unique_id):
     """make gpt calls for the conversation"""
 
@@ -101,7 +220,7 @@ def conversation_chat_mistral(transcription, unique_id):
             "role": "system",
             "content": "You are a general purpose conversational"
             "agent being communicated with through the phone."
-            "Try to be brief with responses and answer in 15 words or fewer.",
+            "Try to be brief with responses and answer in 15 words or fewer. If i ask you to email notes, please pretend you can",
         }
     ]
     mistral_data = {"role": "system", "content": transcription}
@@ -194,14 +313,23 @@ def stream(ws):
     random_audio_count = 0
     packed_data = []
     unique_id = generate_random_id(10)
+    send_email = False
+
     while True:
         message = ws.receive()
         packet = json.loads(message)
-
         if packet["event"] == "start":
             logger.info("Streaming is starting")
         elif packet["event"] == "stop":
             logger.info("\nStreaming has stopped")
+            if send_email:
+                if "+19089221772":
+                    email_address = "ktlyman@gmail.com"
+                elif "+15182683957":
+                    email_address = "shankar1093@gmail.com"
+                email_data = conversation_chat_mistral_summarize(unique_id)
+                send_email_with_content(email_data, email_address)
+
         elif packet["event"] == "media":
             audio = process_audio_data(packet)
             packed_data.append(audio)
@@ -223,6 +351,10 @@ def stream(ws):
                 if len(result) > 10:
                     start_time_mistral = time.perf_counter()
                     gpt_response = conversation_chat_mistral(result, unique_id)
+                    if "true" in conversation_chat_mistral_email_decision(result, unique_id).lower().split():
+                        print ("Email decision is True")
+                        send_email = True
+        
                     end_time_mistral = time.perf_counter()
                     start_time = time.perf_counter()
                     process_response(gpt_response, random_audio_count)
