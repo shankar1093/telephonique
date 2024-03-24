@@ -193,8 +193,8 @@ def conversation_chat_mistral_decision(prompt, transcription, unique_id):
         # Parse the JSON response
         data = response.json()
         return data["choices"][0]["message"]["content"]
-
-    return None
+    
+    return "False"
 
 
 
