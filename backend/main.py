@@ -123,7 +123,7 @@ def conversation_chat_mistral_summarize(unique_id):
 
 
     payload = {
-        "model": "mistral-medium-latest",
+        "model": "mistral-large-latest",
         "messages": context
         + list_of_dicts[:-1],
         "temperature": 0.7,
@@ -195,7 +195,11 @@ def conversation_chat_mistral_decision(prompt, transcription, unique_id):
     if response.status_code == 200:
         # Parse the JSON response
         data = response.json()
-        logger.info(data["choices"][0]["message"]["content"])
+        # if "true" in data["choices"][0]["message"]["content"].lower().split():
+        #     alexa_switch("On")
+        #     logger.info("Alexa switch is on")
+        # elif "false" in data["choices"][0]["message"]["content"].lower().split():
+        #     alexa_switch("Off")
         return data["choices"][0]["message"]["content"]
 
     return "False"
@@ -212,9 +216,8 @@ def conversation_chat_mistral(transcription, unique_id):
             "content": "You are a general purpose conversational"
             "agent being communicated with through the phone."
             "Try to be brief with responses and answer in 15 words or fewer."
-            "If i ask you to email notes, please just say sure."
-            "If i ask you to turn on any lights, please just say sure."
-            "If i ask you to turn off any lights, please just say sure."
+            "If i ask you to email notes, please just say 'emails'."
+            "If i ask you to turn on any lights, please just say 'lights'."
             "Keep your responses brief, less than 15 words if possible.",
         }
     ]
@@ -237,7 +240,7 @@ def conversation_chat_mistral(transcription, unique_id):
         {"role": "system", "content": "The following content is purely for context"}
     ]
     payload = {
-        "model": "mistral-medium-latest",
+        "model": "mistral-large-latest",
         "messages": context
         + list_of_dicts[:-1]
         + [{"role": "user", "content": transcription}]
@@ -255,7 +258,23 @@ def conversation_chat_mistral(transcription, unique_id):
     if response.status_code == 200:
         # Parse the JSON response
         data = response.json()
-        logging.info(data["choices"][0]["message"]["content"])
+
+        text = data["choices"][0]["message"]["content"]
+        words = [word.strip() for word in text.lower().split()]
+        import re
+
+        pattern_lights = r'\blights\b'
+        pattern_email = r'\bemails\b'
+
+        if any(re.search(pattern_lights, word) for word in words):
+            alexa_switch("On")
+            logger.info("Alexa switch is on")
+
+        elif any(re.search(pattern_email, word) for word in words):
+            email_data = conversation_chat_mistral_summarize(unique_id)
+            send_email_with_content(email_data, "ktlyman@gmail.com")
+            logger.info("email is sent")
+
         mistral_response_data = {
             "role": "system",
             "content": data["choices"][0]["message"]["content"],
@@ -263,6 +282,8 @@ def conversation_chat_mistral(transcription, unique_id):
         data_serialized = json.dumps(mistral_response_data)
         redis_client.rpush(unique_id, data_serialized)
         serialized_list = redis_client.lrange(unique_id, 0, -1)
+        # logger.info(data["choices"][0]["message"]["content"].lower().split())
+
 
         return data["choices"][0]["message"]["content"]
 
@@ -320,6 +341,7 @@ def stream(ws):
             redis_client.flushall()
             if send_email:
                 phone_caller = redis_client.get("caller")
+                email_address = "ktlyman@gmail.com"
                 if phone_caller == "kevin":
                     email_address = "ktlyman@gmail.com"
                 elif phone_caller == "shankar":
@@ -344,22 +366,22 @@ def stream(ws):
             result = transcribe_audio(f"output_{random_audio_count}.wav")
             end_time = time.perf_counter()
             if result:
-                logger.info("%s%s ", CL, result)
+                # logger.info("%s%s ", CL, result)
                 if len(result) > 10:
                     start_time_mistral = time.perf_counter()
                     gpt_response = conversation_chat_mistral(result, unique_id)
                     alexa_prompt = "If the user asks to turn on any lights, return the string True, else False and nothing else"
                     email_prompt = "if the user is asking to email notes, return the string True, else False and nothing else."
-                    if "true" in conversation_chat_mistral_decision(result, email_prompt,unique_id).lower().split():
-                        print ("Email decision is True")
-                        send_email = True
-                    if "true" in conversation_chat_mistral_decision(result, alexa_prompt,unique_id).lower().split():
-                        print ("Alexa decision is True")
-                        alexa_switch("On")
-                    if "false" in conversation_chat_mistral_decision(result, alexa_prompt,unique_id).lower().split():
-                        print ("Alexa decision is True")
-                        alexa_switch("Off")
-                    
+                    # if "true" in conversation_chat_mistral_decision(result, email_prompt,unique_id).lower().split():
+                    #     print ("Email decision is True")
+                    #     send_email = True
+                    # if "true" in conversation_chat_mistral_decision(result, alexa_prompt,unique_id).lower().split():
+                    #     print ("Alexa decision is True")
+                    #     alexa_switch("On")
+                    # elif "false" in conversation_chat_mistral_decision(result, alexa_prompt,unique_id).lower().split():
+                    #     print ("Alexa decision is True")
+                    #     alexa_switch("Off")
+                    # conversation_chat_mistral_decision(result, alexa_prompt,unique_id)
                     end_time_mistral = time.perf_counter()
                     start_time = time.perf_counter()
                     process_response(gpt_response, random_audio_count)

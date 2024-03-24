@@ -2,7 +2,9 @@
 
 from dataclasses import dataclass
 import requests
+import logging
 
+logger = logging.getLogger(__name__)
 
 @dataclass
 class TtsResponse:
@@ -35,7 +37,11 @@ class TtsResponse:
                     f.write(chunk)
 
     def create_data_packet(self, gpt_response: str, file_name: str):
+        import time
         """create post request to eleven labs with response from gpt"""
         self.data.update({"text": gpt_response})
         self.response = requests.post(self.url+self.voice_label[self.eleven_voice_style], json=self.data, headers=self.headers, timeout=15)
+        start_time = time.perf_counter()
         self._save_audio(file_name)
+        end_time = time.perf_counter()
+        logger.info(f"Time taken to save audio: {end_time-start_time}")
