@@ -2,7 +2,6 @@ FROM public.ecr.aws/docker/library/python:3.11.8-bullseye as be
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
-    postgresql \
     jq \
     libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
