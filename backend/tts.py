@@ -9,8 +9,10 @@ class TtsResponse:
     """this object will be used to pass text to eleven labs and
     an audio file with the speech will be written to the fs"""
 
+    # voice for shankar is an old french guy, kevin is a young american guy
+    voice_label = {"shankar": "VwQZoIAyyglWE7jHRNDB", "kevin": "L1hzywmmQI2XuvL5TMvY"}
     CHUNK_SIZE = 1024
-    url = "https://api.elevenlabs.io/v1/text-to-speech/L1hzywmmQI2XuvL5TMvY"
+    url = "https://api.elevenlabs.io/v1/text-to-speech/"
     headers = {
         "Accept": "audio/mpeg",
         "Content-Type": "application/json",
@@ -23,6 +25,9 @@ class TtsResponse:
     }
     response = None
 
+    def __init__(self, voice_style: str):
+        self.eleven_voice_style = voice_style
+                         
     def _save_audio(self, file_name):
         with open(file_name, "wb") as f:
             for chunk in self.response.iter_content(chunk_size=self.CHUNK_SIZE):
@@ -32,5 +37,5 @@ class TtsResponse:
     def create_data_packet(self, gpt_response: str, file_name: str):
         """create post request to eleven labs with response from gpt"""
         self.data.update({"text": gpt_response})
-        self.response = requests.post(self.url, json=self.data, headers=self.headers, timeout=15)
+        self.response = requests.post(self.url+self.voice_label[self.eleven_voice_style], json=self.data, headers=self.headers, timeout=15)
         self._save_audio(file_name)
