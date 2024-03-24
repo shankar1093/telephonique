@@ -10,6 +10,7 @@ import random
 import string
 import requests
 from mistral_email import send_email_with_content
+from test_buttons import alexa_switch
 
 from flask import Flask, request
 from flask_sock import Sock
@@ -150,21 +151,17 @@ def conversation_chat_mistral_summarize(unique_id):
     return None
 
 
-def conversation_chat_mistral_email_decision(transcription, unique_id):
+def conversation_chat_mistral_decision(prompt, transcription, unique_id):
     """make gpt calls for the conversation"""
 
     context = [
         {
             "role": "system",
-            "content": "if the user is asking to email notes, return the string True, else False and nothing else"
+            "content": prompt
         }
     ]
     mistral_data = {"role": "system", "content": transcription}
-    data_serialized = json.dumps(mistral_data)
-    redis_client.rpush(unique_id, data_serialized)
-    serialized_list = redis_client.lrange(unique_id, 0, -1)
-    # Deserialize each JSON string back to a dictionary
-    list_of_dicts = [json.loads(item) for item in serialized_list]
+
 
     url = "https://api.mistral.ai/v1/chat/completions"
 
@@ -179,9 +176,7 @@ def conversation_chat_mistral_email_decision(transcription, unique_id):
     ]
     payload = {
         "model": "mistral-large-latest",
-        "messages": context
-        + list_of_dicts[:-1]
-        + [{"role": "user", "content": transcription}]
+        "messages": context + [{"role": "user", "content": transcription}]
         + support_context,
         "temperature": 0.7,
         "top_p": 1,
@@ -197,19 +192,10 @@ def conversation_chat_mistral_email_decision(transcription, unique_id):
     if response.status_code == 200:
         # Parse the JSON response
         data = response.json()
-        logging.info(data["choices"][0]["message"]["content"])
-        mistral_response_data = {
-            "role": "system",
-            "content": data["choices"][0]["message"]["content"],
-        }
-        data_serialized = json.dumps(mistral_response_data)
-        redis_client.rpush(unique_id, data_serialized)
-        serialized_list = redis_client.lrange(unique_id, 0, -1)
-        logger.info("No email decision")
-        logger.info(data["choices"][0]["message"]["content"])
         return data["choices"][0]["message"]["content"]
 
     return None
+
 
 
 def conversation_chat_mistral(transcription, unique_id):
@@ -323,9 +309,10 @@ def stream(ws):
         elif packet["event"] == "stop":
             logger.info("\nStreaming has stopped")
             if send_email:
-                if "+19089221772":
+                phone_caller = redis_client.get("caller")
+                if phone_caller == "kevin":
                     email_address = "ktlyman@gmail.com"
-                elif "+15182683957":
+                elif phone_caller == "shankar":
                     email_address = "shankar1093@gmail.com"
                 email_data = conversation_chat_mistral_summarize(unique_id)
                 send_email_with_content(email_data, email_address)
@@ -351,10 +338,16 @@ def stream(ws):
                 if len(result) > 10:
                     start_time_mistral = time.perf_counter()
                     gpt_response = conversation_chat_mistral(result, unique_id)
-                    if "true" in conversation_chat_mistral_email_decision(result, unique_id).lower().split():
+                    alexa_prompt = "If the user asks to turn on the lights, return the string True, else False and nothing else"
+                    email_prompt = "if the user is asking to email notes, return the string True, else False and nothing else."
+                    if "true" in conversation_chat_mistral_decision(result, email_prompt,unique_id).lower().split():
                         print ("Email decision is True")
                         send_email = True
-        
+                    if "true" in conversation_chat_mistral_decision(result, alexa_prompt,unique_id).lower().split():
+                        alexa_switch("On")
+                    if "false" in conversation_chat_mistral_decision(result, alexa_prompt,unique_id).lower().split():
+                        alexa_switch("Off")
+                    
                     end_time_mistral = time.perf_counter()
                     start_time = time.perf_counter()
                     process_response(gpt_response, random_audio_count)
